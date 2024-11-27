@@ -1,0 +1,103 @@
+import cv2
+import time
+import serial
+from roboflow import Roboflow
+
+# Initialize Roboflow model
+rf = Roboflow(api_key="M2IIGKgXf9mSx1Q9JHVx")
+project = rf.workspace("ahmed-tamer").project("solar-panels-dust-detection")
+version = project.version(2)
+model = version.model
+
+# Initialize the webcam
+cap = cv2.VideoCapture(0)
+
+# Reduce resolution to minimize latency
+#cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+#cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+# Check if the webcam is opened successfully
+if not cap.isOpened():
+    print("Error: Unable to open webcam.")
+    exit()
+
+# Warm-up the camera
+for i in range(10):
+    ret, frame = cap.read()
+
+# Initialize serial communication with Arduino
+arduino_port = '/dev/ttyACM0'  # Replace with your actual port (e.g., '/dev/tty.usbmodemXXXXX' for macOS/Linux)
+arduino = serial.Serial(arduino_port, 9600)
+time.sleep(2)  # Allow time for the serial connection to establish
+
+counter = 0
+try:
+    while True:
+        # Clear any buffered frames
+        for i in range(5):
+            cap.grab()
+
+        # Capture the latest frame
+        ret, frame = cap.read()
+
+        # Check if the frame is captured successfully
+        if not ret:
+            print("Error: Unable to capture frame.")
+            break
+
+        # Specify the file path to save the image
+        file_path = f"PicNo_{counter}.jpg"
+
+        # Save the captured frame as an image
+        cv2.imwrite(file_path, frame)
+        print(f"Image captured and saved as {file_path}")
+
+        # Make a prediction using the saved image
+        prediction = model.predict(file_path).json()
+        print(f"Prediction for {file_path}: {prediction}")
+
+        # Debug: Print the entire JSON response
+        print("Full JSON response:", prediction)
+
+        # Check if there are any predictions
+        if 'predictions' in prediction and prediction['predictions']:
+            # Get the first prediction
+            first_prediction = prediction['predictions'][0]
+
+            # Check if the 'predicted_classes' key exists in the first prediction
+            if 'predicted_classes' in first_prediction and first_prediction['predicted_classes']:
+                # Get the predicted class
+                predicted_class = first_prediction['predicted_classes'][0]
+                print(f"Predicted class: {predicted_class}")
+
+                # Map the class to a specific number
+                class_to_number = {
+                    "Clean": 1,
+                    "Dusty": 2,
+                    "Dirty": 3
+                }
+
+                if predicted_class in class_to_number:
+                    arduino.write((str(class_to_number[predicted_class]) + '\n').encode())
+                    print(f"Sent {class_to_number[predicted_class]} to Arduino")
+                    time.sleep(1)  # Small delay to ensure data is sent
+            else:
+                print("Key 'predicted_classes' not found or empty.")
+        else:
+            print("No predictions made or 'predictions' key not found.")
+
+        # Wait for 5 seconds before capturing the next image
+        time.sleep(5)
+
+        # Increment the counter
+        counter += 1
+
+except KeyboardInterrupt:
+    # Handle the interrupt for graceful termination
+    print("Interrupted by the user.")
+
+finally:
+    # Release the webcam
+    cap.release()
+    arduino.close()  # Close the serial connection
+    print("Webcam and serial connection released.")
